@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
 
+use crate::governance::{self, Store};
 use crate::knowledge::{self, Knowledge, EMBED_MODEL};
 use crate::ollama::{Message, Ollama};
 use crate::Startup;
@@ -37,15 +38,32 @@ struct AppState {
     history: Mutex<Vec<Message>>,
     knowledge: Mutex<Knowledge>,
     index_path: PathBuf,
+    /// The admitted corpus boundary. Every path that reaches the filesystem from a
+    /// request goes through this first.
+    store: Store,
 }
 
 /// What the page receives while a reply is being generated.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ChatEvent {
-    Token { text: String },
-    Done { sources: Vec<(String, f32)> },
-    Error { message: String },
+    Token {
+        text: String,
+    },
+    Done {
+        sources: Vec<(String, f32)>,
+    },
+    /// A governance decision, not a failure -- kept as its own variant so the page
+    /// can render "I declined, and here is what would fix it" differently from
+    /// "something broke".
+    Refused {
+        code: &'static str,
+        message: String,
+        remedy: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// What the page receives while a folder is being indexed.
@@ -60,6 +78,12 @@ enum IndexEvent {
         chunks: usize,
         files: usize,
         seconds: f32,
+    },
+    /// Refused before any embedding happened -- outside the store, or over budget.
+    Refused {
+        code: &'static str,
+        message: String,
+        remedy: String,
     },
     Error {
         message: String,
@@ -123,6 +147,7 @@ pub async fn serve(startup: Startup, port: u16) -> crate::error::Result<()> {
         history: Mutex::new(Vec::new()),
         knowledge: Mutex::new(startup.knowledge),
         index_path: startup.index_path,
+        store: startup.store,
     });
 
     let app = Router::new()
@@ -157,39 +182,39 @@ async fn page() -> Html<&'static str> {
 
 /// List the folders inside a directory, for the picker.
 ///
-/// Directories only -- this never returns file contents, and the server is bound
-/// to loopback, so it exposes nothing that running `ls` locally wouldn't.
-async fn browse(Query(query): Query<BrowseQuery>) -> Json<BrowseResponse> {
-    // No path means "start somewhere sensible": the user's home.
-    let requested = query.path.unwrap_or_else(|| "~".to_string());
-    let path = crate::expand_path(&requested);
+/// Directories only -- this never returns file contents. It is also confined to the
+/// knowledge store: an unadmitted path does not fall back to showing the requester
+/// something else, it falls back to the store root. Before that confinement this
+/// endpoint would enumerate the whole filesystem for anything that could reach the
+/// port, which made the picker a directory-listing oracle as well as a picker.
+async fn browse(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<BrowseQuery>,
+) -> Json<BrowseResponse> {
+    let root = state.store.root();
 
-    // Canonicalize so ".." and symlinks resolve to something we can show.
-    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    // No path means "start at the store root" -- there is nowhere else to start.
+    let requested = query
+        .path
+        .map(|p| crate::expand_path(&p))
+        .unwrap_or_else(|| root.to_path_buf());
 
-    if !path.is_dir() {
-        let home = crate::expand_path("~");
-        return Json(BrowseResponse {
-            path: home.display().to_string(),
-            parent: None,
-            crumbs: Vec::new(),
-            dirs: knowledge::listable_dirs(&home)
-                .into_iter()
-                .map(entry_for)
-                .collect(),
-            files_here: knowledge::count_indexable(&home),
-            error: Some(format!("{} isn't a folder", path.display())),
-        });
-    }
+    let (path, error) = match state.store.admit(&requested) {
+        Ok(admitted) => (admitted, None),
+        Err(refusal) => (root.to_path_buf(), Some(refusal.detail)),
+    };
 
+    // Breadcrumbs stop at the store root rather than walking up to `/`, so the
+    // picker never offers a way out of the boundary.
     let crumbs = path
         .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(root))
         .skip(1)
         .map(|ancestor| BrowseEntry {
             name: ancestor
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "/".to_string()),
+                .unwrap_or_else(|| crate::governance::STORE_DIR.to_string()),
             path: ancestor.display().to_string(),
             files: 0,
         })
@@ -199,7 +224,14 @@ async fn browse(Query(query): Query<BrowseQuery>) -> Json<BrowseResponse> {
         .collect();
 
     Json(BrowseResponse {
-        parent: path.parent().map(|p| p.display().to_string()),
+        // `None` at the store root, which is how the UI hides "go up".
+        parent: if path == root {
+            None
+        } else {
+            path.parent()
+                .filter(|p| p.starts_with(root))
+                .map(|p| p.display().to_string())
+        },
         crumbs,
         dirs: knowledge::listable_dirs(&path)
             .into_iter()
@@ -207,7 +239,7 @@ async fn browse(Query(query): Query<BrowseQuery>) -> Json<BrowseResponse> {
             .collect(),
         files_here: knowledge::count_indexable(&path),
         path: path.display().to_string(),
-        error: None,
+        error,
     })
 }
 
@@ -291,10 +323,23 @@ async fn chat(
             }
         };
 
-        let (context, sources) = match query_vector {
+        let retrieval = match query_vector {
             Some(v) => state.knowledge.lock().await.context_for(&v),
-            None => (None, Vec::new()),
+            None => knowledge::Retrieval::default(),
         };
+        let (context, sources) = (retrieval.context, retrieval.sources);
+
+        // Evidence nominates; policy admits. The model is never asked a question we
+        // have no grounds to answer -- an empty or off-corpus retrieval is refused
+        // here rather than handed over as an empty context for it to improvise from.
+        if let Err(refusal) = governance::EvidenceGate::admit(&sources, retrieval.best_score) {
+            let _ = tx.send(ChatEvent::Refused {
+                code: refusal.code.as_str(),
+                message: refusal.detail,
+                remedy: refusal.remedy,
+            });
+            return;
+        }
 
         let request = {
             let mut history = state.history.lock().await;
@@ -346,11 +391,29 @@ async fn index(
     let (tx, rx) = mpsc::unbounded_channel::<IndexEvent>();
 
     tokio::spawn(async move {
-        let path = crate::expand_path(&req.path);
+        let requested = crate::expand_path(&req.path);
 
-        if !path.is_dir() {
-            let _ = tx.send(IndexEvent::Error {
-                message: format!("not a folder: {}", path.display()),
+        // Policy admits before anything is read. Both gates refuse *before* a
+        // single embedding call, which is the point: the expensive, unresumable
+        // work never starts on a request that was never going to be allowed.
+        let path = match state.store.admit(&requested) {
+            Ok(admitted) => admitted,
+            Err(refusal) => {
+                let _ = tx.send(IndexEvent::Refused {
+                    code: refusal.code.as_str(),
+                    message: refusal.detail,
+                    remedy: refusal.remedy,
+                });
+                return;
+            }
+        };
+
+        let (files, estimated_chunks) = knowledge::survey(&path);
+        if let Err(refusal) = governance::Budget::admit(files, estimated_chunks) {
+            let _ = tx.send(IndexEvent::Refused {
+                code: refusal.code.as_str(),
+                message: refusal.detail,
+                remedy: refusal.remedy,
             });
             return;
         }
@@ -370,10 +433,19 @@ async fn index(
                 });
             }
             Ok(built) => {
-                let event = IndexEvent::Done {
-                    chunks: built.chunks.len(),
+                // Every transition leaves a receipt.
+                let receipt = governance::IndexReceipt {
+                    root: path.clone(),
                     files: built.file_count(),
+                    chunks: built.chunks.len(),
                     seconds: started.elapsed().as_secs_f32(),
+                };
+                println!("  indexed {receipt}");
+
+                let event = IndexEvent::Done {
+                    chunks: receipt.chunks,
+                    files: receipt.files,
+                    seconds: receipt.seconds,
                 };
                 if let Err(e) = built.save(&state.index_path) {
                     eprintln!("could not save index: {e}");

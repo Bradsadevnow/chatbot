@@ -51,8 +51,33 @@ pub const EMBED_MODEL: &str = "nomic-embed-text";
 /// How many excerpts to feed the model per question.
 pub const TOP_K: usize = 5;
 
-/// Below this similarity, an excerpt is more likely noise than signal.
-pub const MIN_SCORE: f32 = 0.35;
+// NOTE: the similarity cutoff deliberately does NOT live here any more. It is
+// `governance::EVIDENCE_FLOOR`, because retrieval and admission were separately
+// enforcing the same idea with two different numbers -- and the stricter one being
+// buried here meant the governance gate could never actually fire. One number, in
+// the module whose job is to state policy.
+
+/// What retrieval nominated for one question.
+///
+/// A struct rather than a tuple because the third field is easy to misread: it is
+/// the best score *before* the floor was applied, which is exactly the number a
+/// refusal needs and exactly the number an answer doesn't.
+#[derive(Debug, Clone, Default)]
+pub struct Retrieval {
+    /// The prompt context, if anything was admitted.
+    pub context: Option<String>,
+    /// (file, best score) for each cited file, for display.
+    pub sources: Vec<(String, f32)>,
+    /// Highest similarity seen, admitted or not. Zero when nothing is indexed.
+    pub best_score: f32,
+}
+
+impl Retrieval {
+    /// Nothing indexed at all -- distinct from "indexed, but nothing matched".
+    fn nothing() -> Self {
+        Retrieval::default()
+    }
+}
 
 /// One piece of one file, plus its meaning-vector.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,19 +190,29 @@ impl Knowledge {
     /// This is deliberately separate from the front end: the terminal and the
     /// browser both call it, so they can never drift apart on what the model
     /// actually gets told.
-    pub fn context_for(&self, query: &[f32]) -> (Option<String>, Vec<(String, f32)>) {
+    pub fn context_for(&self, query: &[f32]) -> Retrieval {
         if self.is_empty() {
-            return (None, Vec::new());
+            return Retrieval::nothing();
         }
 
-        let hits: Vec<_> = self
-            .search(query, TOP_K)
+        let all = self.search(query, TOP_K);
+
+        // The best score BEFORE filtering. Reported even when nothing is admitted,
+        // so a refusal can say what it actually saw ("best match 0.18") instead of
+        // implying retrieval returned literally nothing.
+        let best_score = all.iter().map(|(_, s)| *s).fold(0.0_f32, f32::max);
+
+        let hits: Vec<_> = all
             .into_iter()
-            .filter(|(_, score)| *score >= MIN_SCORE)
+            .filter(|(_, score)| *score >= crate::governance::EVIDENCE_FLOOR)
             .collect();
 
         if hits.is_empty() {
-            return (None, Vec::new());
+            return Retrieval {
+                context: None,
+                sources: Vec::new(),
+                best_score,
+            };
         }
 
         // Tell the model to stay inside the evidence, and to admit it when the
@@ -203,7 +238,11 @@ impl Knowledge {
             }
         }
 
-        (Some(context), cited)
+        Retrieval {
+            context: Some(context),
+            sources: cited,
+            best_score,
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -270,6 +309,30 @@ fn collect_files(root: &Path) -> Vec<PathBuf> {
 
     found.sort();
     found
+}
+
+/// Price an indexing request without embedding anything.
+///
+/// Returns the file count and an estimate of the chunks they'd produce, so the
+/// budget gate can refuse an oversized folder in milliseconds instead of after a
+/// twenty-minute progress bar. Uses the same walk (and therefore the same skip
+/// rules) as the real index, but reads only metadata -- no file contents.
+///
+/// The chunk figure is an estimate by construction: real chunking splits on
+/// paragraph boundaries, so byte-length over the target size is an approximation.
+/// It is deliberately the *cheap* one; being exact would mean reading every file,
+/// which is most of the work the gate exists to avoid.
+pub fn survey(root: &Path) -> (usize, usize) {
+    let files = collect_files(root);
+
+    let total_bytes: u64 = files
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .sum();
+
+    let estimated_chunks = (total_bytes as usize).div_ceil(CHUNK_TARGET_CHARS);
+    (files.len(), estimated_chunks)
 }
 
 /// Subfolders the indexer would actually descend into, for the folder picker.

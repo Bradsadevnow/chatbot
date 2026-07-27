@@ -164,6 +164,25 @@
     border: 1px solid var(--danger);
     color: var(--danger);
   }
+  /* A refusal is a decision, not a breakage. Deliberately NOT styled as an error:
+     the system worked correctly, it just declined -- and told you how to proceed. */
+  .msg.refused .bubble {
+    background: transparent;
+    border: 1px dashed var(--muted);
+    color: var(--text);
+  }
+  .remedy {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .remedy .code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    opacity: 0.7;
+  }
 
   .sources {
     display: flex;
@@ -455,6 +474,29 @@ function addSources(wrap, sources) {
   scrollDown();
 }
 
+/* The remedy that came with a refusal, plus its machine-readable code.
+   Shown together deliberately: the code is what you'd grep for, the remedy is
+   what you'd act on. A refusal without the second one reads like a bug. */
+function addRemedy(wrap, remedy, code) {
+  if (!remedy) return;
+  const box = document.createElement("div");
+  box.className = "remedy";
+
+  const what = document.createElement("span");
+  what.textContent = remedy;
+  box.appendChild(what);
+
+  if (code) {
+    const tag = document.createElement("span");
+    tag.className = "code";
+    tag.textContent = code;
+    box.appendChild(tag);
+  }
+
+  wrap.appendChild(box);
+  scrollDown();
+}
+
 /* Read a server-sent-event stream from a POST response.
    EventSource only does GET, so we parse the frames by hand. */
 async function readStream(response, onEvent) {
@@ -517,8 +559,23 @@ async function send() {
         scrollDown();
       } else if (ev.type === "done") {
         bubble.classList.remove("cursor");
-        if (!got) bubble.textContent = "(empty reply)";
+        // An empty reply is a real outcome, not a blank: the model was given
+        // context and produced no text. Say which, so it isn't mistaken for the
+        // page dropping the response.
+        if (!got) {
+          wrap.className = "msg refused";
+          bubble.textContent =
+            "The model returned no text for this question. Try rephrasing it, " +
+            "or switch models from the dropdown.";
+        }
         addSources(wrap, ev.sources);
+      } else if (ev.type === "refused") {
+        // A refusal is a decision, not a breakage -- shown in its own style, and
+        // always carrying the remedy, so declining stays actionable.
+        bubble.classList.remove("cursor");
+        wrap.className = "msg refused";
+        bubble.textContent = ev.message;
+        addRemedy(wrap, ev.remedy, ev.code);
       } else if (ev.type === "error") {
         bubble.classList.remove("cursor");
         wrap.className = "msg error";
@@ -557,6 +614,8 @@ async function doIndex() {
         $("progress").textContent =
           `learned ${ev.chunks} chunks from ${ev.files} files in ${ev.seconds.toFixed(1)}s`;
         refreshStatus();
+      } else if (ev.type === "refused") {
+        $("progress").textContent = `refused: ${ev.message} — ${ev.remedy}`;
       } else if (ev.type === "error") {
         $("progress").textContent = ev.message;
       }

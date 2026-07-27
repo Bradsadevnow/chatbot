@@ -6,6 +6,7 @@
 
 mod command;
 mod error;
+mod governance;
 mod knowledge;
 mod ollama;
 mod repl;
@@ -14,10 +15,21 @@ mod web;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::governance::Store;
 use crate::knowledge::{Knowledge, EMBED_MODEL};
 use crate::ollama::Ollama;
 
-const DEFAULT_MODEL: &str = "qwen3.5:9b";
+/// Chosen by measurement, not preference. Against this corpus gpt-oss:20b
+/// extracted material the alternatives missed entirely -- the full memory
+/// object model and the STM/MTM/LTM tier definitions -- from byte-identical
+/// excerpts. Its weakness is unmarked interpretive gloss (it wrote "chain of
+/// custody", a phrase in none of the source files), which a prompt can address;
+/// content another model never surfaced is not recoverable that way.
+///
+/// Note it ignores `think: false` and reasons anyway. That costs latency but is
+/// harmless here -- it still returns content, which is the failure mode that
+/// actually matters (see `ollama.rs`).
+const DEFAULT_MODEL: &str = "gpt-oss:20b";
 const DEFAULT_HOST: &str = "http://localhost:11434";
 const DEFAULT_PORT: u16 = 4141;
 
@@ -37,6 +49,8 @@ pub struct Startup {
     pub available: Vec<String>,
     pub knowledge: Knowledge,
     pub index_path: PathBuf,
+    /// The only folder this process is allowed to read files from.
+    pub store: Store,
 }
 
 #[tokio::main]
@@ -99,6 +113,21 @@ async fn bootstrap() -> Result<Startup> {
         eprintln!("  get it with: {BOLD}ollama pull {EMBED_MODEL}{RESET}\n");
     }
 
+    // Deny by default. Without a knowledge store there is no admitted corpus, so
+    // there is nothing this program is permitted to read -- and starting anyway
+    // would leave it willing to index whatever it was pointed at, which is the
+    // posture the governance layer exists to remove. Refuse, and say how to fix it.
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let store = match Store::discover(&base) {
+        Ok(store) => store,
+        Err(refusal) => {
+            eprintln!("{RED}refused:{RESET} {}", refusal.detail);
+            eprintln!("  {BOLD}{}{RESET}", refusal.remedy);
+            eprintln!("  ({})", refusal.code.as_str());
+            std::process::exit(1);
+        }
+    };
+
     let index_path = PathBuf::from(INDEX_FILE);
     let knowledge = Knowledge::load(&index_path).unwrap_or_default();
 
@@ -109,6 +138,7 @@ async fn bootstrap() -> Result<Startup> {
         available,
         knowledge,
         index_path,
+        store,
     })
 }
 

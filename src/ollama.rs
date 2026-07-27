@@ -56,6 +56,17 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [Message],
     stream: bool,
+    /// Reasoning models stream their chain-of-thought in a separate `thinking`
+    /// field, with `content` empty until the thinking finishes. We only read
+    /// `content`, so leaving this on has a failure mode worse than the lost
+    /// visibility: a model that spends its whole generation budget thinking
+    /// emits NO content at all, and the answer arrives empty.
+    ///
+    /// Measured on qwen3.5:9b against this corpus: 1,505 of 1,620 streamed
+    /// chunks were thinking, and "What are the core principles?" reproducibly
+    /// returned zero content. With this off, the same question answers normally.
+    /// Models that don't support it ignore the field.
+    think: bool,
 }
 
 /// One newline-delimited JSON object from the streaming response.
@@ -113,6 +124,7 @@ impl Ollama {
             model,
             messages,
             stream: true,
+            think: false,
         };
 
         let response = self

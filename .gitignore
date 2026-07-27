@@ -1,5 +1,14 @@
 /target
 .knowledge.json
 
+# Your documents. The folder is tracked (the program refuses to start without it),
+# the contents never are.
+/knowledgestore/*
+!/knowledgestore/.gitkeep
+
+# Source documents that happen to live in the repo root. The indexer can't read
+# PDFs anyway -- the markdown these were compiled from is what goes in the store.
+*.pdf
+
 # Personal tool permissions, not project config.
 .claude/settings.local.json*
