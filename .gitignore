@@ -1,5 +1,10 @@
 /target
 .knowledge.json
 
+# Your documents. The folder is tracked (the program refuses to start without it),
+# the contents never are.
+/knowledgestore/*
+!/knowledgestore/.gitkeep
+
 # Personal tool permissions, not project config.
 .claude/settings.local.json*

@@ -6,6 +6,7 @@
 
 mod command;
 mod error;
+mod governance;
 mod knowledge;
 mod ollama;
 mod repl;
@@ -14,6 +15,7 @@ mod web;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::governance::Store;
 use crate::knowledge::{Knowledge, EMBED_MODEL};
 use crate::ollama::Ollama;
 
@@ -37,6 +39,8 @@ pub struct Startup {
     pub available: Vec<String>,
     pub knowledge: Knowledge,
     pub index_path: PathBuf,
+    /// The only folder this process is allowed to read files from.
+    pub store: Store,
 }
 
 #[tokio::main]
@@ -99,6 +103,21 @@ async fn bootstrap() -> Result<Startup> {
         eprintln!("  get it with: {BOLD}ollama pull {EMBED_MODEL}{RESET}\n");
     }
 
+    // Deny by default. Without a knowledge store there is no admitted corpus, so
+    // there is nothing this program is permitted to read -- and starting anyway
+    // would leave it willing to index whatever it was pointed at, which is the
+    // posture the governance layer exists to remove. Refuse, and say how to fix it.
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let store = match Store::discover(&base) {
+        Ok(store) => store,
+        Err(refusal) => {
+            eprintln!("{RED}refused:{RESET} {}", refusal.detail);
+            eprintln!("  {BOLD}{}{RESET}", refusal.remedy);
+            eprintln!("  ({})", refusal.code.as_str());
+            std::process::exit(1);
+        }
+    };
+
     let index_path = PathBuf::from(INDEX_FILE);
     let knowledge = Knowledge::load(&index_path).unwrap_or_default();
 
@@ -109,6 +128,7 @@ async fn bootstrap() -> Result<Startup> {
         available,
         knowledge,
         index_path,
+        store,
     })
 }
 

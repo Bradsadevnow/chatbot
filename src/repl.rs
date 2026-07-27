@@ -7,6 +7,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::command::Command;
 use crate::error::Result;
+use crate::governance;
 use crate::knowledge::{Knowledge, EMBED_MODEL};
 use crate::ollama::Message;
 use crate::Startup;
@@ -27,6 +28,7 @@ pub async fn run(startup: Startup) -> Result<()> {
         available,
         mut knowledge,
         index_path,
+        store,
     } = startup;
 
     println!("{BOLD}rust chatbot{RESET} {DIM}// {model} @ {host}{RESET}");
@@ -92,9 +94,22 @@ pub async fn run(startup: Startup) -> Result<()> {
                     continue;
                 }
 
-                let path = crate::expand_path(&raw_path);
-                if !path.is_dir() {
-                    println!("{RED}not a folder:{RESET} {}\n", path.display());
+                // Same two gates as the browser, in the same order, from the same
+                // module -- so the two front ends cannot drift on what is allowed
+                // any more than they can drift on what the model is told.
+                let path = match store.admit(&crate::expand_path(&raw_path)) {
+                    Ok(admitted) => admitted,
+                    Err(refusal) => {
+                        println!("{YELLOW}refused:{RESET} {}", refusal.detail);
+                        println!("{DIM}  {}{RESET}\n", refusal.remedy);
+                        continue;
+                    }
+                };
+
+                let (files, estimated_chunks) = crate::knowledge::survey(&path);
+                if let Err(refusal) = governance::Budget::admit(files, estimated_chunks) {
+                    println!("{YELLOW}refused:{RESET} {}", refusal.detail);
+                    println!("{DIM}  {}{RESET}\n", refusal.remedy);
                     continue;
                 }
 
@@ -113,12 +128,13 @@ pub async fn run(startup: Startup) -> Result<()> {
                         println!("{YELLOW}nothing readable found there.{RESET}\n");
                     }
                     Ok(built) => {
-                        println!(
-                            "{GREEN}learned{RESET} {} chunks from {} files in {:.1}s",
-                            built.chunks.len(),
-                            built.file_count(),
-                            started.elapsed().as_secs_f32()
-                        );
+                        let receipt = governance::IndexReceipt {
+                            root: path.clone(),
+                            files: built.file_count(),
+                            chunks: built.chunks.len(),
+                            seconds: started.elapsed().as_secs_f32(),
+                        };
+                        println!("{GREEN}learned:{RESET} {receipt}");
                         if let Err(e) = built.save(&index_path) {
                             eprintln!("{YELLOW}could not save index:{RESET} {e}");
                         }
@@ -164,18 +180,26 @@ pub async fn run(startup: Startup) -> Result<()> {
             }
 
             Command::Say(text) => {
-                let (context, cited) = if knowledge.is_empty() {
-                    (None, Vec::new())
+                let retrieval = if knowledge.is_empty() {
+                    crate::knowledge::Retrieval::default()
                 } else {
                     match client.embed(EMBED_MODEL, std::slice::from_ref(&text)).await {
                         Ok(vectors) if !vectors.is_empty() => knowledge.context_for(&vectors[0]),
-                        Ok(_) => (None, Vec::new()),
+                        Ok(_) => crate::knowledge::Retrieval::default(),
                         Err(e) => {
-                            eprintln!("{YELLOW}lookup failed, answering without files:{RESET} {e}");
-                            (None, Vec::new())
+                            eprintln!("{YELLOW}lookup failed:{RESET} {e}");
+                            crate::knowledge::Retrieval::default()
                         }
                     }
                 };
+                let (context, cited) = (retrieval.context, retrieval.sources);
+
+                if let Err(refusal) = governance::EvidenceGate::admit(&cited, retrieval.best_score)
+                {
+                    println!("{YELLOW}refused:{RESET} {}", refusal.detail);
+                    println!("{DIM}  {}{RESET}\n", refusal.remedy);
+                    continue;
+                }
 
                 history.push(Message::user(text));
 
