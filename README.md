@@ -35,8 +35,15 @@ cargo run -- --port 8080     # different port
 cargo run -- --help
 ```
 
-Defaults to `qwen3.5:9b`; switch models from the dropdown. Override the startup default
+Defaults to `gpt-oss:20b`; switch models from the dropdown. Override the startup default
 with `CHAT_MODEL` / `OLLAMA_HOST`. Indexing needs `nomic-embed-text`.
+
+The default was picked by running the same four questions through every locally
+installed model against byte-identical excerpts. `gpt-oss:20b` recovered detail the
+others dropped — a five-object model and a set of tier definitions that two other
+models missed completely. It is the slowest of the three and it reasons even when told
+not to, which is why it isn't the obvious pick on a stopwatch. Every model tested
+declined the unsupported question correctly, so that wasn't a differentiator.
 
 The server binds to `127.0.0.1` only and has no authentication, so it still has no
 business being reachable from the network — but it is no longer true that it will read

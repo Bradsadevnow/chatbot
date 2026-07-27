@@ -19,7 +19,17 @@ use crate::governance::Store;
 use crate::knowledge::{Knowledge, EMBED_MODEL};
 use crate::ollama::Ollama;
 
-const DEFAULT_MODEL: &str = "qwen3.5:9b";
+/// Chosen by measurement, not preference. Against this corpus gpt-oss:20b
+/// extracted material the alternatives missed entirely -- the full memory
+/// object model and the STM/MTM/LTM tier definitions -- from byte-identical
+/// excerpts. Its weakness is unmarked interpretive gloss (it wrote "chain of
+/// custody", a phrase in none of the source files), which a prompt can address;
+/// content another model never surfaced is not recoverable that way.
+///
+/// Note it ignores `think: false` and reasons anyway. That costs latency but is
+/// harmless here -- it still returns content, which is the failure mode that
+/// actually matters (see `ollama.rs`).
+const DEFAULT_MODEL: &str = "gpt-oss:20b";
 const DEFAULT_HOST: &str = "http://localhost:11434";
 const DEFAULT_PORT: u16 = 4141;
 
