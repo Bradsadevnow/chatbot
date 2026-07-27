@@ -1,0 +1,30 @@
+[package]
+name = "chatbot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The async runtime. Rust has no built-in one -- you pick it. Tokio is the default choice.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+
+# HTTP client. default-features = false + rustls-tls avoids needing system OpenSSL,
+# so this builds on a bare machine with no C dev headers installed.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+
+# The reason people put up with everything else. Derive macros that generate
+# JSON (de)serialization at compile time -- no reflection, no runtime cost.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Stream combinators (gives us `.next()` on a byte stream).
+futures-util = "0.3"
+
+# The web server behind the browser UI.
+axum = "0.8"
+
+# Lets us turn a channel into a stream, which is how tokens get pushed to the browser.
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[profile.release]
+opt-level = 3
+lto = true

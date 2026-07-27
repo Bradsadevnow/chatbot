@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chatbot</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f7f9;
+    --border: #e2e5ea;
+    --text: #16191d;
+    --muted: #6b7280;
+    --accent: #b45309;
+    --accent-soft: #fef3c7;
+    --user-bg: #16191d;
+    --user-text: #ffffff;
+    --danger: #b91c1c;
+    --ok: #15803d;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f25;
+      --border: #2b2f37;
+      --text: #e8eaed;
+      --muted: #9aa1ab;
+      --accent: #f59e0b;
+      --accent-soft: #3a2c0d;
+      --user-bg: #e8eaed;
+      --user-text: #14161a;
+      --danger: #f87171;
+      --ok: #4ade80;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- header ---------- */
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin-right: auto;
+  }
+  .brand span {
+    color: var(--accent);
+  }
+
+  select, button, input {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+  button {
+    cursor: pointer;
+    transition: border-color .12s ease, background .12s ease;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .pill {
+    font-size: 12.5px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    white-space: nowrap;
+  }
+  .pill.loaded { color: var(--ok); border-color: var(--ok); }
+
+  /* ---------- index bar ---------- */
+
+  .indexbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .indexbar input {
+    flex: 1;
+    min-width: 220px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+  }
+  .indexbar .hint {
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .progress {
+    font-size: 13px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- messages ---------- */
+
+  main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px 8px;
+  }
+  .thread {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .msg { display: flex; flex-direction: column; gap: 6px; }
+  .msg.user { align-items: flex-end; }
+
+  .bubble {
+    max-width: 88%;
+    padding: 11px 15px;
+    border-radius: var(--radius);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .bubble {
+    background: var(--user-bg);
+    color: var(--user-text);
+    border-bottom-right-radius: 4px;
+  }
+  .msg.bot .bubble {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.error .bubble {
+    background: transparent;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+  }
+
+  .sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .src {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 3px 10px;
+  }
+  .src b { font-weight: 600; }
+
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 64px 20px;
+  }
+  .empty code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 7px;
+  }
+
+  .cursor::after {
+    content: "▍";
+    color: var(--accent);
+    animation: blink 1s steps(2, start) infinite;
+  }
+  @keyframes blink { to { visibility: hidden; } }
+
+  /* ---------- folder picker ---------- */
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, .45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .backdrop[hidden] { display: none; }
+
+  .modal {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .35);
+    width: min(580px, 100%);
+    max-height: min(74vh, 660px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .modal-head strong { margin-right: auto; }
+  .modal-head button {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 8px;
+  }
+
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+  }
+  .crumbs button {
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    padding: 2px 4px;
+    border-radius: 5px;
+  }
+  .crumbs button:hover { background: var(--accent-soft); }
+  .crumbs .sep { color: var(--muted); }
+
+  .folder-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 9px 12px;
+    border-radius: 8px;
+    color: var(--text);
+  }
+  .row:hover { background: var(--panel); }
+  .row .icon { color: var(--muted); flex: none; }
+  .row .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row .count {
+    margin-left: auto;
+    flex: none;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .row .count.has { color: var(--ok); }
+
+  .modal-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .modal-foot .info {
+    margin-right: auto;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .modal-empty {
+    padding: 28px 18px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  /* ---------- composer ---------- */
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 14px 20px 18px;
+    background: var(--panel);
+  }
+  .composer {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 11px 14px;
+    max-height: 180px;
+    min-height: 46px;
+  }
+  textarea:focus, input:focus, select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .send {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    padding: 11px 20px;
+    border-radius: var(--radius);
+    font-weight: 600;
+  }
+  @media (prefers-color-scheme: dark) {
+    .send { color: #14161a; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">rust <span>chatbot</span></div>
+  <select id="model" title="model"></select>
+  <span class="pill" id="status">loading…</span>
+  <button id="clear" title="Forget the conversation, keep the files">Clear chat</button>
+</header>
+
+<div class="indexbar">
+  <button id="browse">📁 Choose folder…</button>
+  <input id="folder" placeholder="…or type a path" spellcheck="false">
+  <button id="index">Index folder</button>
+  <button id="forget" title="Drop everything it learned from files">Forget files</button>
+  <span class="progress" id="progress"></span>
+</div>
+
+<div class="backdrop" id="picker" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Choose a folder">
+    <div class="modal-head">
+      <strong>Choose a folder</strong>
+      <button id="picker-home" title="Go to home folder">🏠</button>
+      <button id="picker-close" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="folder-list" id="folder-list"></div>
+    <div class="modal-foot">
+      <span class="info" id="picker-info"></span>
+      <button id="picker-cancel">Cancel</button>
+      <button class="send" id="picker-use">Index this folder</button>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+  <div class="thread" id="thread">
+    <div class="empty" id="empty">
+      Point it at a folder above, then ask a question.<br>
+      It answers from your files and shows which ones it used.
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Ask something…  (Enter to send, Shift+Enter for a new line)"></textarea>
+    <button class="send" id="send">Send</button>
+  </div>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const thread = $("thread");
+const main = $("main");
+let busy = false;
+
+function scrollDown() {
+  main.scrollTop = main.scrollHeight;
+}
+
+function clearEmpty() {
+  const e = $("empty");
+  if (e) e.remove();
+}
+
+function addMessage(role, text) {
+  clearEmpty();
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  thread.appendChild(wrap);
+  scrollDown();
+  return { wrap, bubble };
+}
+
+function addSources(wrap, sources) {
+  if (!sources || !sources.length) return;
+  const box = document.createElement("div");
+  box.className = "sources";
+  for (const [file, score] of sources) {
+    const chip = document.createElement("span");
+    chip.className = "src";
+    chip.innerHTML = "<b></b> ";
+    chip.querySelector("b").textContent = file;
+    chip.append(score.toFixed(2));
+    box.appendChild(chip);
+  }
+  wrap.appendChild(box);
+  scrollDown();
+}
+
+/* Read a server-sent-event stream from a POST response.
+   EventSource only does GET, so we parse the frames by hand. */
+async function readStream(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let split;
+    while ((split = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("data:")) {
+          const payload = line.slice(5).trim();
+          if (payload) onEvent(JSON.parse(payload));
+        }
+      }
+    }
+  }
+}
+
+function setBusy(state) {
+  busy = state;
+  $("send").disabled = state;
+  $("index").disabled = state;
+  $("input").disabled = state;
+}
+
+async function send() {
+  const input = $("input");
+  const text = input.value.trim();
+  if (!text || busy) return;
+
+  input.value = "";
+  input.style.height = "auto";
+  addMessage("user", text);
+  setBusy(true);
+
+  const { wrap, bubble } = addMessage("bot", "");
+  bubble.classList.add("cursor");
+  let got = "";
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+    if (!res.ok) throw new Error("server said " + res.status);
+
+    await readStream(res, (ev) => {
+      if (ev.type === "token") {
+        got += ev.text;
+        bubble.textContent = got;
+        scrollDown();
+      } else if (ev.type === "done") {
+        bubble.classList.remove("cursor");
+        if (!got) bubble.textContent = "(empty reply)";
+        addSources(wrap, ev.sources);
+      } else if (ev.type === "error") {
+        bubble.classList.remove("cursor");
+        wrap.className = "msg error";
+        bubble.textContent = ev.message;
+      }
+    });
+  } catch (e) {
+    wrap.className = "msg error";
+    bubble.textContent = String(e);
+  } finally {
+    bubble.classList.remove("cursor");
+    setBusy(false);
+    $("input").focus();
+  }
+}
+
+async function doIndex() {
+  const folder = $("folder").value.trim();
+  if (!folder || busy) return;
+
+  setBusy(true);
+  $("progress").textContent = "reading…";
+
+  try {
+    const res = await fetch("/api/index", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: folder }),
+    });
+    if (!res.ok) throw new Error("server said " + res.status);
+
+    await readStream(res, (ev) => {
+      if (ev.type === "progress") {
+        $("progress").textContent = `embedded ${ev.done}/${ev.total} chunks`;
+      } else if (ev.type === "done") {
+        $("progress").textContent =
+          `learned ${ev.chunks} chunks from ${ev.files} files in ${ev.seconds.toFixed(1)}s`;
+        refreshStatus();
+      } else if (ev.type === "error") {
+        $("progress").textContent = ev.message;
+      }
+    });
+  } catch (e) {
+    $("progress").textContent = String(e);
+  } finally {
+    setBusy(false);
+  }
+}
+
+/* ---------- folder picker ---------- */
+
+let pickerPath = null;
+
+function openPicker() {
+  $("picker").hidden = false;
+  // Start where we already are, so re-indexing the same tree is one click.
+  loadFolder($("folder").value.trim() || null);
+}
+
+function closePicker() {
+  $("picker").hidden = true;
+}
+
+async function loadFolder(path) {
+  const list = $("folder-list");
+  list.innerHTML = '<div class="modal-empty">loading…</div>';
+
+  let data;
+  try {
+    const url = "/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "");
+    data = await (await fetch(url)).json();
+  } catch (e) {
+    list.innerHTML = '<div class="modal-empty">could not read that folder</div>';
+    return;
+  }
+
+  pickerPath = data.path;
+
+  // Breadcrumbs: every ancestor is one click away.
+  const crumbs = $("crumbs");
+  crumbs.innerHTML = "";
+  const trail = [...data.crumbs, { name: basename(data.path), path: data.path }];
+  trail.forEach((c, i) => {
+    const b = document.createElement("button");
+    b.textContent = c.name === "/" ? "/" : c.name;
+    b.addEventListener("click", () => loadFolder(c.path));
+    crumbs.appendChild(b);
+    if (i < trail.length - 1) {
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = "/";
+      crumbs.appendChild(sep);
+    }
+  });
+
+  // Folder rows.
+  list.innerHTML = "";
+
+  if (data.parent) {
+    list.appendChild(folderRow("↑", "..", data.parent, null));
+  }
+
+  for (const dir of data.dirs) {
+    list.appendChild(folderRow("📁", dir.name, dir.path, dir.files));
+  }
+
+  if (!data.dirs.length && !data.parent) {
+    list.innerHTML = '<div class="modal-empty">no subfolders here</div>';
+  }
+
+  const n = data.files_here;
+  $("picker-info").textContent = data.error
+    ? data.error
+    : n === 0
+      ? "no readable files directly in this folder"
+      : `${n} readable file${n === 1 ? "" : "s"} in this folder`;
+
+  $("picker-use").disabled = false;
+}
+
+function basename(p) {
+  if (p === "/") return "/";
+  const parts = p.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "/";
+}
+
+function folderRow(icon, name, path, count) {
+  const row = document.createElement("button");
+  row.className = "row";
+  row.addEventListener("click", () => loadFolder(path));
+
+  const i = document.createElement("span");
+  i.className = "icon";
+  i.textContent = icon;
+
+  const n = document.createElement("span");
+  n.className = "name";
+  n.textContent = name;
+
+  row.append(i, n);
+
+  if (count !== null) {
+    const c = document.createElement("span");
+    c.className = "count" + (count > 0 ? " has" : "");
+    c.textContent = count > 0 ? `${count} file${count === 1 ? "" : "s"}` : "";
+    row.appendChild(c);
+  }
+  return row;
+}
+
+$("browse").addEventListener("click", openPicker);
+$("picker-close").addEventListener("click", closePicker);
+$("picker-cancel").addEventListener("click", closePicker);
+$("picker-home").addEventListener("click", () => loadFolder("~"));
+
+$("picker-use").addEventListener("click", () => {
+  if (!pickerPath) return;
+  $("folder").value = pickerPath;
+  closePicker();
+  doIndex();
+});
+
+// Click the dark area outside the dialog to dismiss.
+$("picker").addEventListener("click", (e) => {
+  if (e.target === $("picker")) closePicker();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("picker").hidden) closePicker();
+});
+
+async function refreshStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+
+    const sel = $("model");
+    if (sel.options.length !== s.models.length) {
+      sel.innerHTML = "";
+      for (const m of s.models) {
+        const o = document.createElement("option");
+        o.value = m;
+        o.textContent = m;
+        sel.appendChild(o);
+      }
+    }
+    sel.value = s.model;
+
+    const pill = $("status");
+    if (s.chunks > 0) {
+      pill.textContent = `${s.chunks} chunks · ${s.files} files`;
+      pill.title = s.root;
+      pill.classList.add("loaded");
+      if (!$("folder").value) $("folder").value = s.root;
+    } else {
+      pill.textContent = "no files indexed";
+      pill.classList.remove("loaded");
+    }
+  } catch {
+    $("status").textContent = "server unreachable";
+  }
+}
+
+$("send").addEventListener("click", send);
+
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+
+$("input").addEventListener("input", (e) => {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(e.target.scrollHeight, 180) + "px";
+});
+
+$("index").addEventListener("click", doIndex);
+
+$("folder").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doIndex();
+});
+
+$("model").addEventListener("change", async (e) => {
+  await fetch("/api/model", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: e.target.value }),
+  });
+});
+
+$("clear").addEventListener("click", async () => {
+  await fetch("/api/clear", { method: "POST" });
+  thread.innerHTML = "";
+  addMessage("bot", "Conversation cleared. Your indexed files are still loaded.");
+});
+
+$("forget").addEventListener("click", async () => {
+  await fetch("/api/forget", { method: "POST" });
+  $("progress").textContent = "forgot the indexed files";
+  refreshStatus();
+});
+
+refreshStatus();
+$("input").focus();
+
+// Opening the page at #pick jumps straight to the folder picker.
+if (location.hash === "#pick") openPicker();
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+/target
+.knowledge.json
+
+# Personal tool permissions, not project config.
+.claude/settings.local.json*
