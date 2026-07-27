@@ -559,7 +559,15 @@ async function send() {
         scrollDown();
       } else if (ev.type === "done") {
         bubble.classList.remove("cursor");
-        if (!got) bubble.textContent = "(empty reply)";
+        // An empty reply is a real outcome, not a blank: the model was given
+        // context and produced no text. Say which, so it isn't mistaken for the
+        // page dropping the response.
+        if (!got) {
+          wrap.className = "msg refused";
+          bubble.textContent =
+            "The model returned no text for this question. Try rephrasing it, " +
+            "or switch models from the dropdown.";
+        }
         addSources(wrap, ev.sources);
       } else if (ev.type === "refused") {
         // A refusal is a decision, not a breakage -- shown in its own style, and
